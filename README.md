@@ -1,2 +1,3 @@
 # WebScrap
-Scraps Monster and Naukri for job postings
+Scrape Monster and Naukri for job postings
+Scrape Hindustan Times for Headlines
