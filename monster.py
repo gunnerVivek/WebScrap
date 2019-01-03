@@ -1,91 +1,210 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Sep 18 23:34:56 2018
-
 @author: Vivek
 """
-# disable popup
-    #fp = webdriver.FirefoxProfile(r'C:\Users\Vivek\AppData\Roaming\Mozilla\Firefox\Profiles\f49tsxfy.default')
-    #fp.set_preference('dom.disable_beforeunload', True)
 
-
-
-
-
-
-from selenium import webdriver
-from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
-from selenium.webdriver.common.keys import Keys
-
-import pandas as pd
+import requests
+import lxml.html
 import datetime
 from dateutil.parser import parse
+import pandas as pd
+import re
 
+import definations
 
-def set_up():
-    ''' This functions prepares te webdriver for use
-        
-        @returns preped web driver
+class MonsterScrapper:
     '''
-    # provide firefox path
-    binary = FirefoxBinary(r"C:\Users\Vivek\Desktop\firefox-sdk\bin\firefox.exe")
+        defines methods needed to scrape data from monsterindia.com
+        
+    '''
     
-    # stop indefinate page load
-    fp = webdriver.FirefoxProfile()
+    def __init__(self, days):
+        '''
+            initializes the class variables
+            @parameter - no of days for which data is scraped
+        '''
+        self.days = days
+        self.today = datetime.datetime.strptime(datetime.datetime.today().strftime("%Y-%m-%d"),"%Y-%m-%d")
+        self.end_day = self.today + datetime.timedelta(days=self.days)
+        self.phone_pattern = re.compile(r'\d{10}')
+        self.email_pattern = re.compile(r'\S+@\S+')
+        self.salary_pattern = re.compile(r'\d*\s?[-]?\d+[.]?\d+\s?[lL][pP][aA]')
     
-    fp.set_preference('webdriver.load.strategy', 'unstable')
-    fp.set_preference("http.response.timeout", 10)
-    fp.set_preference("dom.max_script_run_time", 10)
     
-    fp.set_preference("browser.startup.homepage","")
+#    today = datetime.datetime.strptime(datetime.datetime.today().strftime("%Y-%m-%d"),"%Y-%m-%d")
+#    end_day = today + datetime.timedelta(days=5)
+#    
+#    df =  pd.DataFrame(columns=['job_src_link', 'source', 'exp_range','job_type'])
     
-    # initialize driver
-    driver = webdriver.Firefox(firefox_binary=binary, firefox_profile=fp)
+    def scrape_landing(self):
+        '''
+            This method takes care of first phase of scrapeing 
+            @returns - a df with part of the information
+        '''
+        
+        df = pd.DataFrame(columns=['job_src_link', 'source', 'exp_range','job_type'])
+        base_url = 'https://www.monsterindia.com/jobs-in-bangalore'#.html
+        go_next_page = True
+        page_no = 1
+        while(go_next_page):
+            # todo -- look for status
+            if page_no == 1:
+                html_content = requests.get(base_url+'.html')
+            else:
+                html_content = requests.get(base_url + '-' +str(page_no)+'.html')    # www.monsterindia.com/jobs-in-bangalore-2.html
+            
+            doc = lxml.html.fromstring(html_content.content)
+            
+            job_items  = doc.xpath("//li//div[contains(@class, 'jobwrap')]")
+            #title = doc.xpath("//div [@class='jtxt jico ico2']/span/text()")
+            for i in range(len(job_items)):
+                job = job_items[i]
+                
+                date = job.xpath("string(.//div[contains(@ class, 'job_optitem ico7')]/text())").split(':')[1].strip()
+                date = parse(date)
+                if date > self.end_day:
+                    # break whil loop
+                    go_next_page = False
+                    # break for loop
+                    break
+                link = job.xpath("string(.//a[@class='title_in']/@href)")
+                title = job.xpath("string(.//a[@class='title_in']/@title)")
+                exp = job.xpath("string(.//div [@class='jtxt jico ico2']/span/text())")#.text_content()
+                job_type = 'part time' if 'part time' in title.lower() else 'full time'
+                source = 'Monster'
+                df.loc[df.shape[0]] = [link, source, exp, job_type]
+                
+            #print(page_no)
+            page_no+=1
+        
+        return df
     
-    driver.implicitly_wait(10)
     
-    return driver
+    def find_phone(self, description):
+        '''
+            Finds a phone number in a given text
+        '''
+        
+        ls = []
+        for des in description:
+            found = self.phone_pattern.search(des)
+            if (found):
+                ls.append(found[0])
+                
+        return ', '.join(ls)
+    
+    
+    def find_email(self, description):
+        '''
+            Finds an email in a given text
+        '''
+        
+        ls = []
+        for des in description:
+            found = self.email_pattern.search(des)
+            if (found):
+                ls.append(found[0])
+                
+        return ', '.join(ls)
+    
+    
+    def find_salary(self, description):
+        '''
+            Finds salary in a given text
+        '''
+        
+        ls = []
+        for des in description:
+            found = self.salary_pattern.search(des)
+            if (found):
+                ls.append(found[0])
+                
+        return ', '.join(ls)
+    
+    
+    def scrape_inner(self, outer):
+        
+       '''
+            Scrapes the rest of the data
+            Follows links collected from the first pass
+            
+            @returns - complete data
+       ''' 
+       
+       # add the rest of the columns 
+       cols = ['sector','skills_kw', 'salary', 'job_role', 'description', 'email', 'phone', 'education']
+       outer = pd.concat([outer, pd.DataFrame(columns=cols)])
+       
+       for i in range(0, outer.shape[0]):
+            link = outer.loc[i, 'job_src_link']
+            html = requests.get('https:'+link)
+            
+            html_content = lxml.html.fromstring(html.content)
+            
+            skills = html_content.xpath("//div[contains(@class,'key_skills')]//a[contains(@class, 'keylink lft')]/text()")
+            skills_kw = ', '.join(skills)
+            outer.loc[i, 'skills_kw'] = skills_kw
+            #print(skill_kw)
+            
+            job_role = html_content.xpath("//div[@class='col-md-3 col-xs-12 pull-right jd_rol_section']/div[contains(text(), 'Role')]/following-sibling::span[1]/a/text()")
+            job_role = ', '.join(job_role)
+            outer.loc[i, 'job_role'] = job_role
+            #print(job_role)
+            
+            sector = html_content.xpath("//div[@class='col-md-3 col-xs-12 pull-right jd_rol_section']/div[contains(text(), 'Industry')]/following-sibling::span[1]/a/text()")
+            sector = ', '.join(sector)
+            outer.loc[i, 'sector'] = sector
+            #print(sector)
+            
+            description = html_content.xpath("//div[contains(@class, 'col-md-9 col-xs-12 pull-left')]/div[contains(@class, 'job_description')]/div [contains(@class,'desc')]/descendant-or-self::*/text()")
+            outer.loc[i, 'description'] = description
+            #print(description)
+            
+            education = html_content.xpath("//div[@class='col-md-3 col-xs-12 pull-right jd_rol_section']/div[contains(text(), 'Education')]/following-sibling::span[1]/text()")
+            education = ''.join(education)
+            outer.loc[i, 'education'] = education
+            #print(education)
+            
+            phone_number = self.find_phone(description)
+            outer.loc[i, 'phone'] = phone_number
+            #print(phone_number)
+            
+            email = self.find_email(description)
+            outer.loc[i, 'email'] = email
+            #print(email)
+            
+            salary = html_content.xpath("//div[@class='col-md-3 col-xs-12 pull-right jd_rol_section']/div[contains(text(), 'Salary')]/following-sibling::span[1]/text()")
+            if not salary:
+                salary = self.find_salary(description)
+            outer.loc[i, 'salary'] = salary 
+       
+       # order the columns as needed
+       order_of_cols = ['job_src_link', 'source', 'job_type', 'sector', 'skills_kw', 'exp_range', 'salary', 'job_role', 'description', 'email', 'phone', 'education']
+       outer = outer[order_of_cols]
+       
+       return outer
+   
+    
+    def scrape(self):
+        '''
+            Calls the two inner scrapinf functions
+            
+            @returns - data scraped from monster
+        '''
+        
+        outer = self.scrape_landing()
+        monster_data = self.scrape_inner(outer)
+        
+        return monster_data
 
 
-# get the ready to use web driver
-driver = set_up()
 
-# navigate to url
-driver.get('https://www.monsterindia.com')#/jobs-in-bangalore.html')
-
-# Enter job search location
-driver.find_element_by_xpath("//input[@id='lmy']").send_keys('Bangalore')
-# click on search
-driver.find_element_by_xpath("//input[contains(@value, 'Search')]").send_keys(Keys.RETURN)
-
-# no of days to collect data
-# collect data for 10 days
-# notified by end day
-today = today = datetime.datetime.strptime(datetime.datetime.today().strftime("%Y-%m-%d"),"%Y-%m-%d")
-end_day = today + datetime.timedelta(days=10)
-
-# get the job elements
-elements = driver.find_elements_by_xpath("//li//div[contains(@class, 'jobwrap')]")
-for i in range(len(elements)):
-    print('Elememt : %d' %(i+1))
+if __name__ == '__main__':
     
-    # Step 1: look for date 
-    date = elements[i].find_element_by_xpath("//div[contains(@ class, 'job_optitem ico7')]").text.split(':')[1].strip()
+    # create object
+    monster = MonsterScrapper(5)
+    # call the scraper
+    monster_data = monster.scrape()
     
-    
-    job = elements[i].find_element_by_xpath("//a[@class='title_in']")
-    job_title = job.get_attribute('title').strip()
-    job_link = job.get_attribute('href').strip()
-    exp = elements[i].find_element_by_xpath("//div[@class='jtxt jico ico2']/span").text.strip()
-
-    print(date)
-    print(job_title)
-    print(job_link)
-    print(exp)
-    
-    print('-------------------------------')
-
-    
-#print(date.get_attribute('text'))
-
-driver.close()
+    # write the data to the disk
+    monster_data.to_csv(definations.ROOT_DIR+'\..\\output\\monster_test.csv', index=False)
