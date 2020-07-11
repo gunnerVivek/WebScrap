@@ -1,0 +1,4 @@
+# run the scripts At:
+# 12:00 A.M. on every day-of-week from Monday through Friday.
+
+0 12 * * 1-5 cd ~ && pyhton3 hindustan_times.py; pyhton3 monster.py; pyhton3 naukri.py
